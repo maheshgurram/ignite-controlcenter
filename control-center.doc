@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+if [ ! -z "${IGNITE_SCRIPT_STRICT_MODE:-}" ]
+then
+    set -o nounset
+    set -o errexit
+    set -o pipefail
+    set -o errtrace
+    set -o functrace
+fi
+
+#
+# Copyright (C) GridGain Systems. All Rights Reserved.
+#  _________        _____ __________________        _____
+#  __  ____/___________(_)______  /__  ____/______ ____(_)_______
+#  _  / __  __  ___/__  / _  __  / _  / __  _  __ `/__  / __  __ \
+#  / /_/ /  _  /    _  /  / /_/ /  / /_/ /  / /_/ / _  /  _  / / /
+#  \____/   /_/     /_/   \_,__/   \____/   \__,_/  /_/   /_/ /_/
+#
+
+#
+# GridGain Control Center command line loader.
+#
+
+#
+# The function exports WORK_FOLDER variable with path to GridGain Control Center installation folder.
+#
+setJarFile() {
+    WORK_FOLDER="$(cd "$(dirname "$0")"; "pwd")";
+
+    JAR_FILE=${WORK_FOLDER}/libs/gridgain-control-center-on-premise-2022.1.jar
+
+    #
+    # Check WORK_FOLDER is valid.
+    #
+    if [ ! -f "${JAR_FILE}" ]; then
+        echo $0", ERROR:"
+        echo "GridGain Control Center installation folder is incorrect."
+        echo "Please run gmc.sh from GridGain Control Center installation folder."
+
+        exit 1
+    fi
+}
+
+setJarFile
+
+javaVersion() {
+    version=$("$1" -version 2>&1 | awk -F '"' '/version/ {print $2}')
+}
+
+# Extract only major version of java to `version` variable.
+javaMajorVersion() {
+    javaVersion "$1"
+    version="${version%%.*}"
+
+    if [ $version -eq 1 ]; then
+        # Version seems starts from 1, we need second number.
+        javaVersion "$1"
+        backIFS=$IFS
+
+        IFS=. ver=(${version##*-})
+        version=${ver[1]}
+
+        IFS=$backIFS
+    fi
+}
+
+#
+# Discovers path to Java executable and checks it's version.
+# The function exports JAVA variable with path to Java executable.
+#
+checkJava() {
+    # Check JAVA_HOME.
+    if [ "${JAVA_HOME:-}" = "" ]; then
+        JAVA=`type -p java`
+        RETCODE=$?
+
+        if [ $RETCODE -ne 0 ]; then
+            echo $0", ERROR:"
+            echo "JAVA_HOME environment variable is not found."
+            echo "Please point JAVA_HOME variable to location of JDK 1.8 or later."
+            echo "You can also download latest JDK at http://java.com/download"
+
+            exit 1
+        fi
+
+        JAVA_HOME=
+    else
+        JAVA=${JAVA_HOME}/bin/java
+    fi
+
+    #
+    # Check JDK.
+    #
+    javaMajorVersion "$JAVA"
+
+    if [ $version -lt 8 ]; then
+        echo "$0, ERROR:"
+        echo "The $version version of JAVA installed in JAVA_HOME=$JAVA_HOME is incompatible."
+        echo "Please point JAVA_HOME variable to installation of JDK 1.8 or later."
+        echo "You can also download latest JDK at http://java.com/download"
+        exit 1
+    fi
+}
+
+#
+# JVM options. See http://java.sun.com/javase/technologies/hotspot/vmoptions.jsp for more details.
+#
+# ADD YOUR/CHANGE ADDITIONAL OPTIONS HERE
+#
+if [ -z "$JVM_OPTS" ] ; then
+    JVM_OPTS="-Xms1g -Xmx2g -server -XX:MaxMetaspaceSize=256m"
+fi
+
+#
+# Uncomment the following GC settings if you see spikes in your throughput due to Garbage Collection.
+#
+JVM_OPTS="$JVM_OPTS -XX:+UseG1GC"
+
+#
+# Uncomment if you get StackOverflowError.
+# On 64 bit systems this value can be larger, e.g. -Xss16m
+#
+# JVM_OPTS="${JVM_OPTS} -Xss4m"
+
+#
+# Uncomment to set preference for IPv4 stack.
+#
+# JVM_OPTS="${JVM_OPTS} -Djava.net.preferIPv4Stack=true"
+
+#
+# Set 'file.encoding' to UTF-8 default if not specified otherwise
+#
+case "${JVM_OPTS:-}" in
+    *-Dfile.encoding=*)
+        ;;
+    *)
+        JVM_OPTS="${JVM_OPTS:-} -Dfile.encoding=UTF-8";;
+esac
+
+#
+# Discover path to Java executable and check it's version.
+#
+checkJava
+
+if [ $version -eq 8 ] ; then
+    JVM_OPTS="\
+        -XX:+AggressiveOpts \
+         ${JVM_OPTS}"
+
+elif [ $version -gt 8 ] && [ $version -lt 11 ]; then
+    JVM_OPTS="\
+        -XX:+AggressiveOpts \
+        --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED \
+        --add-exports=java.base/sun.nio.ch=ALL-UNNAMED \
+        --add-exports=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED \
+        --add-exports=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED \
+        --add-exports=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED \
+        --illegal-access=permit \
+        --add-modules=java.xml.bind \
+        ${JVM_OPTS}"
+
+elif [ $version -ge 11 ] ; then
+    JVM_OPTS="\
+        --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED \
+        --add-exports=java.base/sun.nio.ch=ALL-UNNAMED \
+        --add-exports=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED \
+        --add-exports=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED \
+        --add-exports=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED \
+        --illegal-access=permit \
+        ${JVM_OPTS}"
+fi
+
+"$JAVA" -DIGNITE_HOME="${WORK_FOLDER}" ${JVM_OPTS} -jar ${JAR_FILE}
